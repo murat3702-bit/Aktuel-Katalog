@@ -23,5 +23,13 @@ jobs:
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v4
 
-    - name: Build with Gradle
-      run: gradle build
+    # Sadece Gradle derlemesi yerine test edilmemiş debug APK üreten komutla güncelledik
+    - name: Build Debug APK
+      run: gradle assembleDebug
+
+    # Üretilen APK dosyasını GitHub paneline indirme bağlantısı olarak yükler
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Android-Debug-APK
+        path: app/build/outputs/apk/debug/app-debug.apk
