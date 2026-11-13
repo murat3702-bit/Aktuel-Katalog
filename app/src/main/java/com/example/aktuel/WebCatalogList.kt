@@ -5,6 +5,7 @@ package com.example.aktuel
 import android.annotation.SuppressLint
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -28,9 +29,9 @@ import org.json.JSONArray
 import org.json.JSONTokener
 import java.io.File
 
-/** Marketin sayfasındaki bir katalog kartı (başlık, tarih, kapak, PDF bağlantısı). */
+/** Marketin sayfasındaki bir katalog kartı. [index]: sayfadaki "Online Katalog" düğmesinin sırası. */
 data class WebItem(
-    val href: String,
+    val index: Int,
     val title: String,
     val date: String,
     val img: String,
@@ -38,18 +39,25 @@ data class WebItem(
     val endDate: Long?,
 )
 
-// Sayfadaki "Online Katalog" bağlantılarını ve bulundukları kartın başlık/tarih/kapağını toplar.
-private const val EXTRACT_JS = """
-(function(){
-  var out = [], seen = {};
-  var links = document.querySelectorAll('a[href]');
-  for (var i = 0; i < links.length; i++) {
-    var a = links[i];
-    var t = (a.innerText || '').toLowerCase();
-    var isCat = t.indexOf('online katalog') >= 0 || /\.pdf(\?|#|$)/i.test(a.href);
-    if (!isCat || seen[a.href]) continue;
-    var card = a, img = null;
-    for (var k = 0; k < 6 && card.parentElement; k++) {
+// Sayfadaki "Online Katalog" düğmelerini bulan ortak parça (bağlantı ya da düğme olabilir).
+private const val BTNS_JS = """
+function btns(){
+  var all = document.querySelectorAll('a, button, [role="button"]');
+  var out = [];
+  for (var i = 0; i < all.length; i++) {
+    var t = (all[i].innerText || '').trim().toLowerCase();
+    if (t.indexOf('online katalog') === 0 && t.length < 30) out.push(all[i]);
+  }
+  return out;
+}
+"""
+
+// Her düğmenin bulunduğu kartın başlığını, tarihini ve kapak görselini toplar.
+private const val EXTRACT_JS = "(function(){" + BTNS_JS + """
+  var b = btns(), out = [];
+  for (var i = 0; i < b.length; i++) {
+    var card = b[i], img = null;
+    for (var k = 0; k < 8 && card.parentElement; k++) {
       card = card.parentElement;
       img = card.querySelector('img');
       if (img) break;
@@ -57,16 +65,18 @@ private const val EXTRACT_JS = """
     var h = card.querySelector('h1,h2,h3,h4,h5');
     var p = card.querySelector('p');
     out.push({
-      href: a.href,
+      index: i,
       title: h ? h.innerText.trim() : '',
       date: p ? p.innerText.trim() : '',
       img: img ? (img.currentSrc || img.src) : ''
     });
-    seen[a.href] = 1;
   }
   return JSON.stringify(out);
-})()
-"""
+})()"""
+
+// n. kartın "Online Katalog" düğmesine basar (site PDF'i kendi koduyla indirtir).
+private fun clickJs(index: Int): String =
+    "(function(i){" + BTNS_JS + "var b = btns(); if (b[i]) b[i].click();})(" + index + ")"
 
 private val DATE_TEXT =
     Regex("""\d{1,2}\s*[^\d\s\-–()]*\s*[-–]\s*\d{1,2}\s+[^\d\s\-–()]+\s+\d{4}""")
@@ -76,12 +86,12 @@ fun parseWebItems(json: String): List<WebItem> {
     val out = mutableListOf<WebItem>()
     for (i in 0 until arr.length()) {
         val o = arr.getJSONObject(i)
-        val href = o.optString("href")
-        if (href.isBlank()) continue
+        val index = o.optInt("index", -1)
+        if (index < 0) continue // eski biçimli önbellek kaydı
         val date = o.optString("date").replace("\n", " ")
         val (start, end) = parseDates(date)
         out += WebItem(
-            href = href,
+            index = index,
             title = o.optString("title").ifBlank { "Katalog" },
             date = DATE_TEXT.find(date)?.value ?: date.take(40),
             img = o.optString("img"),
@@ -117,8 +127,9 @@ private fun pollItems(view: WebView, attempt: Int, onDone: (String?) -> Unit) {
 
 /**
  * Marketin kendi sayfasını görünmez bir tarayıcıda açıp katalog kartlarını okur ve
- * diğer marketlerdeki gibi kapak kartları olarak gösterir. Karta dokununca PDF indirilip
- * görüntüleyicide açılır.
+ * diğer marketlerdeki gibi kapak kartları olarak gösterir. Karta dokununca, o kartın
+ * "Online Katalog" düğmesine arka planda basılır, site PDF'i indirmeye başlar; uygulama
+ * bu indirmeyi yakalayıp PDF'i sayfa sayfa görüntüleyicide açar.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -134,15 +145,20 @@ fun WebCatalogList(
         mutableStateOf(runCatching { parseWebItems(cacheFile.readText()) }.getOrDefault(emptyList()))
     }
     var loading by remember { mutableStateOf(true) }
+    var ready by remember { mutableStateOf(false) } // sayfa yüklendi, düğmelere basılabilir
     var failed by remember { mutableStateOf(false) }
-    var userAgent by remember { mutableStateOf<String?>(null) }
     val holder = remember { arrayOfNulls<WebView>(1) }
     val started = remember { BooleanArray(1) }
+    val waiting = remember { BooleanArray(1) } // bir karta basıldı, PDF indirmesi bekleniyor
+    val pendingLabel = remember { arrayOf("") }
+
+    fun toast(msg: String) = Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
 
     fun finish(json: String?) {
         loading = false
         if (json != null) {
             entries = parseWebItems(json)
+            ready = true
             failed = false
             runCatching { cacheFile.writeText(json) }
         } else if (entries.isEmpty()) {
@@ -152,9 +168,27 @@ fun WebCatalogList(
 
     fun reload() {
         loading = true
+        ready = false
         failed = false
         started[0] = false
         holder[0]?.loadUrl(market.webUrl ?: "about:blank")
+    }
+
+    fun openCard(item: WebItem) {
+        val wv = holder[0]
+        if (wv == null || !ready) {
+            toast("Sayfa hâlâ yükleniyor, birkaç saniye sonra tekrar dokunun")
+            return
+        }
+        pendingLabel[0] = item.title + " • " + item.date
+        waiting[0] = true
+        wv.evaluateJavascript(clickJs(item.index), null)
+        wv.postDelayed({
+            if (waiting[0]) {
+                waiting[0] = false
+                toast("Katalog bağlantısı alınamadı. Sağ üstten siteyi açmayı deneyin")
+            }
+        }, 10_000)
     }
 
     BackHandler { onBack() }
@@ -166,19 +200,30 @@ fun WebCatalogList(
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Geri") }
             },
             actions = {
+                TextButton(onClick = onOpenSite) { Text("Site") }
                 IconButton(onClick = { reload() }) { Icon(Icons.Default.Refresh, "Yenile") }
             },
         )
     }) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
-            // Görünmez tarayıcı: sadece sayfayı yükleyip kartları okumak için
+            // Görünmez tarayıcı: sayfayı yükleyip kartları okur ve düğmelere basar
             AndroidView(
                 modifier = Modifier.size(1.dp).alpha(0f),
                 factory = { c ->
                     WebView(c).apply {
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
-                        userAgent = settings.userAgentString
+                        // düğme yeni pencere açmaya çalışırsa aynı tarayıcıda açılsın
+                        settings.javaScriptCanOpenWindowsAutomatically = true
+                        setDownloadListener { dlUrl, ua, _, _, _ ->
+                            if (!waiting[0]) return@setDownloadListener
+                            waiting[0] = false
+                            if (dlUrl.startsWith("blob:") || dlUrl.startsWith("data:")) {
+                                toast("Bu katalog uygulamada açılamıyor (tarayıcıya özel indirme)")
+                            } else {
+                                onOpenPdf(dlUrl, ua, pendingLabel[0])
+                            }
+                        }
                         webViewClient = object : WebViewClient() {
                             override fun onPageFinished(view: WebView, url: String?) {
                                 if (started[0]) return
@@ -202,10 +247,8 @@ fun WebCatalogList(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        items(entries, key = { it.href }) { item ->
-                            Card(onClick = {
-                                onOpenPdf(item.href, userAgent, item.title + " • " + item.date)
-                            }) {
+                        items(entries, key = { it.index.toString() + it.title }) { item ->
+                            Card(onClick = { openCard(item) }) {
                                 Column {
                                     AsyncImage(
                                         model = item.img,
@@ -214,7 +257,7 @@ fun WebCatalogList(
                                         modifier = Modifier.fillMaxWidth().aspectRatio(0.75f),
                                     )
                                     Column(Modifier.padding(8.dp)) {
-                                        Text(item.title, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
+                                        Text(item.title, style = MaterialTheme.typography.bodyMedium, maxLines = 3)
                                         Text(item.date, style = MaterialTheme.typography.bodySmall, maxLines = 2)
                                     }
                                 }
@@ -228,7 +271,7 @@ fun WebCatalogList(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(
-                        if (failed) "Katalog bağlantıları sayfada bulunamadı." else "Katalog bulunamadı.",
+                        if (failed) "Katalog düğmeleri sayfada bulunamadı." else "Katalog bulunamadı.",
                         textAlign = TextAlign.Center,
                     )
                     Spacer(Modifier.height(12.dp))
