@@ -57,6 +57,10 @@ import android.widget.FrameLayout
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import android.widget.Toast
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -93,22 +97,81 @@ fun AppRoot(repo: Repo, store: OrderStore) {
     var market by remember { mutableStateOf<Market?>(null) }
     var web by remember { mutableStateOf<Market?>(null) }
     var catalog by remember { mutableStateOf<Catalog?>(null) }
+    var pdfStatus by remember { mutableStateOf<String?>(null) }
+    var pdfJob by remember { mutableStateOf<Job?>(null) }
 
-    BackHandler(enabled = market != null) {
-        if (catalog != null) catalog = null else market = null
+    val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
+
+    // Katalog listesinden geri: market seçimine dön (Viewer ve WebScreen kendi geri tuşunu yönetir)
+    BackHandler(enabled = market != null) { market = null }
+
+    // PDF'i indirip sayfalara çevir, sonra görüntüleyicide aç
+    fun openPdf(url: String, userAgent: String?, from: Market) {
+        pdfJob?.cancel()
+        pdfStatus = "Katalog indiriliyor…"
+        pdfJob = scope.launch {
+            try {
+                val pages = PdfCatalogs.load(ctx, url, userAgent, from.webUrl) { done, total ->
+                    pdfStatus = if (total == 0) "Katalog indiriliyor…" else "Sayfalar hazırlanıyor  $done / $total"
+                }
+                if (pages.isNotEmpty()) {
+                    catalog = Catalog(
+                        id = url,
+                        name = from.label,
+                        date = from.label + " kataloğu",
+                        startDate = null,
+                        endDate = null,
+                        cover = pages.first(),
+                        pages = pages,
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Toast.makeText(ctx, "Katalog açılamadı: " + (e.message ?: "hata"), Toast.LENGTH_LONG).show()
+            } finally {
+                pdfStatus = null
+            }
+        }
     }
 
     val c = catalog
     val m = market
     val w = web
-    when {
-        w != null -> WebScreen(w, onBack = { web = null })
-        c != null -> Viewer(c, onBack = { catalog = null })
-        m != null -> CatalogList(repo, m, onOpen = { catalog = it }, onBack = { market = null })
-        else -> MarketList(store, onPick = { picked ->
-            // webUrl'si olan market (Anpagross) uygulama içi tarayıcıda açılır
-            if (picked.webUrl != null) web = picked else market = picked
-        })
+    Box(Modifier.fillMaxSize()) {
+        when {
+            w != null -> WebScreen(w, onBack = { web = null }, onPdf = { url, ua -> openPdf(url, ua, w) })
+            m != null -> CatalogList(repo, m, onOpen = { catalog = it }, onBack = { market = null })
+            else -> MarketList(store, onPick = { picked ->
+                // webUrl'si olan market (Anpagross, Mopaş, Grosper) uygulama içi tarayıcıda açılır
+                if (picked.webUrl != null) web = picked else market = picked
+            })
+        }
+
+        // Görüntüleyici, açıldığı ekranın (liste ya da web sayfası) üstünde durur; geri gelince ekran korunur
+        if (c != null) Viewer(c, onBack = { catalog = null })
+
+        val status = pdfStatus
+        if (status != null) {
+            BackHandler {
+                pdfJob?.cancel()
+                pdfStatus = null
+            }
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color(0xCC000000))
+                    .pointerInput(Unit) { detectTapGestures { } },
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = Color.White)
+                    Spacer(Modifier.height(16.dp))
+                    Text(status, color = Color.White)
+                }
+            }
+        }
     }
 }
 
@@ -283,7 +346,7 @@ private fun openFrameDirectly(view: WebView, keyword: String, attempt: Int = 0) 
  * FlipHTML5 "tam ekran" düğmesi için WebChromeClient.onShowCustomView gerekir.
  */
 @Composable
-fun WebScreen(market: Market, onBack: () -> Unit) {
+fun WebScreen(market: Market, onBack: () -> Unit, onPdf: (String, String?) -> Unit = { _, _ -> }) {
     var progress by remember { mutableIntStateOf(0) }
     var customView by remember { mutableStateOf<View?>(null) }
     var customCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
@@ -346,6 +409,16 @@ fun WebScreen(market: Market, onBack: () -> Unit) {
                             settings.useWideViewPort = true
                             settings.loadWithOverviewMode = true
                             setBackgroundColor(0xFF000000.toInt())
+                            if (market.pdfViewer) {
+                                // "Online Katalog" gibi yeni pencere açan bağlantılar aynı sayfada açılsın
+                                settings.javaScriptCanOpenWindowsAutomatically = true
+                                // PDF indirilmek yerine uygulamada sayfa sayfa açılır
+                                setDownloadListener { dlUrl, userAgent, _, mimeType, _ ->
+                                    val isPdf = (mimeType ?: "").contains("pdf", ignoreCase = true) ||
+                                        dlUrl.substringBefore('?').endsWith(".pdf", ignoreCase = true)
+                                    if (isPdf) onPdf(dlUrl, userAgent)
+                                }
+                            }
                             webViewClient = object : WebViewClient() {
                                 override fun shouldInterceptRequest(
                                     view: WebView,
@@ -673,6 +746,7 @@ fun CatalogList(repo: Repo, market: Market, onOpen: (Catalog) -> Unit, onBack: (
 
 @Composable
 fun Viewer(catalog: Catalog, onBack: () -> Unit) {
+    BackHandler { onBack() }
     val pager = rememberPagerState(pageCount = { catalog.pages.size })
     var zoomed by remember { mutableStateOf(false) }
     LaunchedEffect(pager.currentPage) { zoomed = false }

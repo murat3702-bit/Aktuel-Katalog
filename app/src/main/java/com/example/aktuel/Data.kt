@@ -30,6 +30,8 @@ data class Market(
     // true: üst çubuk ve sayfadaki başlık/alt gezinme çubukları gizlenir, tam ekran katalog gösterilir
     // (bozulursa false yapıp kullanın)
     val hideChrome: Boolean = false,
+    // true: sayfadaki PDF bağlantısı indirilmek yerine uygulama içinde sayfa sayfa açılır (Grosper)
+    val pdfViewer: Boolean = false,
 )
 
 data class Catalog(
@@ -63,6 +65,11 @@ val MARKETS = listOf(
     Market(
         "mopas", "Mopaş", R.drawable.logo_mopas,
         webUrl = "https://www.kataloglar.com.tr/mopa/",
+    ),
+    Market(
+        "grosper", "Grosper", R.drawable.logo_grosper,
+        webUrl = "https://www.grosper.com.tr/sayfalar/bulten.html",
+        pdfViewer = true,
     ),
 )
 
