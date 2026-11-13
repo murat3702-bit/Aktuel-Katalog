@@ -15,7 +15,7 @@ import java.util.TimeZone
 const val BASE_URL = "https://www.aktuelstudio2.com/"
 private const val CACHE_HOURS = 6L
 
-// Uygulama içi sayfalarda (Anpagross, Mopaş) reklam sunucularına giden istekleri engelle
+// Uygulama içi sayfalarda (Anpagross) reklam sunucularına giden istekleri engelle
 // ve sayfadaki reklam alanlarını gizle. Bir sayfa bozulursa false yapıp deneyin.
 const val BLOCK_ADS = true
 
@@ -63,10 +63,6 @@ val MARKETS = listOf(
         webUrl = "https://anpagross.com/tr-TR/kataloglar/193/0",
         frameKeyword = "fliphtml5",
         hideChrome = true,
-    ),
-    Market(
-        "mopas", "Mopaş", R.drawable.logo_mopas,
-        webUrl = "https://www.kataloglar.com.tr/mopa/",
     ),
     Market(
         "grosper", "Grosper", R.drawable.logo_grosper,
