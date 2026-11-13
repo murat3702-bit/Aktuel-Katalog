@@ -32,6 +32,8 @@ data class Market(
     val hideChrome: Boolean = false,
     // true: sayfadaki PDF bağlantısı indirilmek yerine uygulama içinde sayfa sayfa açılır (Grosper)
     val pdfViewer: Boolean = false,
+    // true: market sayfası görünmez tarayıcıda okunur, katalog kartları (PDF bağlantılı) uygulamada listelenir
+    val webList: Boolean = false,
 )
 
 data class Catalog(
@@ -70,6 +72,7 @@ val MARKETS = listOf(
         "grosper", "Grosper", R.drawable.logo_grosper,
         webUrl = "https://www.grosper.com.tr/sayfalar/bulten.html",
         pdfViewer = true,
+        webList = true,
     ),
 )
 

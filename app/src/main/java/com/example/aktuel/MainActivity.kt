@@ -96,6 +96,7 @@ class MainActivity : ComponentActivity() {
 fun AppRoot(repo: Repo, store: OrderStore) {
     var market by remember { mutableStateOf<Market?>(null) }
     var web by remember { mutableStateOf<Market?>(null) }
+    var listMarket by remember { mutableStateOf<Market?>(null) }
     var catalog by remember { mutableStateOf<Catalog?>(null) }
     var pdfStatus by remember { mutableStateOf<String?>(null) }
     var pdfJob by remember { mutableStateOf<Job?>(null) }
@@ -107,7 +108,7 @@ fun AppRoot(repo: Repo, store: OrderStore) {
     BackHandler(enabled = market != null) { market = null }
 
     // PDF'i indirip sayfalara çevir, sonra görüntüleyicide aç
-    fun openPdf(url: String, userAgent: String?, from: Market) {
+    fun openPdf(url: String, userAgent: String?, from: Market, label: String? = null) {
         pdfJob?.cancel()
         pdfStatus = "Katalog indiriliyor…"
         pdfJob = scope.launch {
@@ -119,7 +120,7 @@ fun AppRoot(repo: Repo, store: OrderStore) {
                     catalog = Catalog(
                         id = url,
                         name = from.label,
-                        date = from.label + " kataloğu",
+                        date = label ?: (from.label + " kataloğu"),
                         startDate = null,
                         endDate = null,
                         cover = pages.first(),
@@ -139,13 +140,25 @@ fun AppRoot(repo: Repo, store: OrderStore) {
     val c = catalog
     val m = market
     val w = web
+    val lm = listMarket
     Box(Modifier.fillMaxSize()) {
         when {
             w != null -> WebScreen(w, onBack = { web = null }, onPdf = { url, ua -> openPdf(url, ua, w) })
+            lm != null -> WebCatalogList(
+                lm,
+                onOpenPdf = { url, ua, label -> openPdf(url, ua, lm, label) },
+                onOpenSite = { listMarket = null; web = lm },
+                onBack = { listMarket = null },
+            )
             m != null -> CatalogList(repo, m, onOpen = { catalog = it }, onBack = { market = null })
             else -> MarketList(store, onPick = { picked ->
-                // webUrl'si olan market (Anpagross, Mopaş, Grosper) uygulama içi tarayıcıda açılır
-                if (picked.webUrl != null) web = picked else market = picked
+                when {
+                    // sayfasındaki PDF'li kartlar uygulamada listelenir (Grosper)
+                    picked.webList -> listMarket = picked
+                    // webUrl'si olan market (Anpagross, Mopaş) uygulama içi tarayıcıda açılır
+                    picked.webUrl != null -> web = picked
+                    else -> market = picked
+                }
             })
         }
 

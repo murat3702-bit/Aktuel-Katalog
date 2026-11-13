@@ -77,6 +77,14 @@ object PdfCatalogs {
             conn.disconnect()
         }
 
+        // indirilen şey gerçekten PDF mi (bazen hata sayfası gelir)
+        val head = ByteArray(5)
+        val readN = src.inputStream().use { it.read(head) }
+        if (readN < 5 || String(head, Charsets.ISO_8859_1) != "%PDF-") {
+            dir.deleteRecursively()
+            throw java.io.IOException("Bağlantı bir PDF dosyası döndürmedi")
+        }
+
         // 2) sayfaları görsele çevir
         val pfd = ParcelFileDescriptor.open(src, ParcelFileDescriptor.MODE_READ_ONLY)
         val renderer = PdfRenderer(pfd)
